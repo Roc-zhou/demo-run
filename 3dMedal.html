@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 马拉松奖牌 - 外部模型/图片版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: transparent; }
+        canvas { display: block; }
+        #loading {
+            position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+            font-family: system-ui, sans-serif; color: #888; font-size: 14px;
+            pointer-events: none; transition: opacity 0.4s;
+        }
+    </style>
+</head>
+<body>
+<div id="loading">加载中…</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+// ============================================================
+// 配置区：改这里就行
+// ============================================================
+const CONFIG = {
+    // 加载模式：'model' 用 3D 模型，'image' 用图片贴正面，'procedural' 用代码生成
+    mode: 'model',
+
+    modelUrl: './assets/medal.glb',      // GLB/GLTF 模型路径
+    imageUrl: './assets/medal-face.png', // 奖牌正面图片路径
+
+    // 模型加载后的自适应缩放：让奖牌直径约为 2.8 个单位
+    modelTargetSize: 2.8,
+
+    // 图片贴图版的奖牌厚度
+    imageMedalThickness: 0.18,
+};
+// ============================================================
+
+const loadingEl = document.getElementById('loading');
+
+// ---------- 场景 ----------
+const scene = new THREE.Scene();
+scene.background = null;
+
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 0.4, 6);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.2;
+controls.enablePan = false;
+
+// ---------- 环境反射（金属质感关键）----------
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+// ---------- 灯光 ----------
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+
+const keyLight = new THREE.DirectionalLight(0xffeedd, 2.5);
+keyLight.position.set(-3, 5, 4);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(1024, 1024);
+scene.add(keyLight);
+
+const fillLight = new THREE.DirectionalLight(0xbbddff, 1.2);
+fillLight.position.set(4, 2, 3);
+scene.add(fillLight);
+
+const rimLight = new THREE.DirectionalLight(0xffffff, 1.5);
+rimLight.position.set(0, -2, -5);
+scene.add(rimLight);
+
+// ---------- 奖牌容器 ----------
+const medalGroup = new THREE.Group();
+scene.add(medalGroup);
+
+// 统一的金属材质（给模型未带材质或图片版使用）
+const goldMaterial = new THREE.MeshStandardMaterial({
+    color: 0xd4af37, metalness: 0.95, roughness: 0.25, envMapIntensity: 1.2,
+});
+const darkMetalMaterial = new THREE.MeshStandardMaterial({
+    color: 0x8a6d1f, metalness: 0.9, roughness: 0.35, envMapIntensity: 1.0,
+});
+
+// ============================================================
+// 加载器
+// ============================================================
+const gltfLoader = new GLTFLoader();
+const dracoLoader = new DRACOLoader();
+// 若模型用了 Draco 压缩，需要这个解码器（从 CDN 加载）
+dracoLoader.setDecoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/');
+gltfLoader.setDRACOLoader(dracoLoader);
+
+const textureLoader = new THREE.TextureLoader();
+
+// ---------- 模式 A：加载 3D 模型 ----------
+function loadModel(url) {
+    return new Promise((resolve, reject) => {
+        gltfLoader.load(
+            url,
+            (gltf) => {
+                const model = gltf.scene;
+
+                // 自动居中 + 缩放到目标尺寸
+                const box = new THREE.Box3().setFromObject(model);
+                const size = box.getSize(new THREE.Vector3());
+                const center = box.getCenter(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const scale = CONFIG.modelTargetSize / maxDim;
+
+                model.position.sub(center);          // 居中到原点
+                model.scale.setScalar(scale);
+                model.position.multiplyScalar(scale);
+
+                // 阴影 & 材质增强
+                model.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        // 如果模型自带的材质金属度太低，可强制提升（按需开启）
+                        // if (child.material) {
+                        //     child.material.metalness = 0.9;
+                        //     child.material.roughness = 0.3;
+                        // }
+                    }
+                });
+
+                medalGroup.add(model);
+                resolve();
+            },
+            (xhr) => {
+                if (xhr.total) {
+                    const p = Math.round((xhr.loaded / xhr.total) * 100);
+                    loadingEl.textContent = `加载模型 ${p}%`;
+                }
+            },
+            reject
+        );
+    });
+}
+
+// ---------- 模式 B：图片贴到奖牌正面 ----------
+function loadImageMedal(url) {
+    return new Promise((resolve, reject) => {
+        textureLoader.load(
+            url,
+            (texture) => {
+                texture.colorSpace = THREE.SRGBColorSpace;
+                texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+                const radius = 1.4;
+                const thickness = CONFIG.imageMedalThickness;
+
+                // 正面材质：图片贴图 + 轻微金属感
+                const faceMat = new THREE.MeshStandardMaterial({
+                    map: texture,
+                    metalness: 0.6,
+                    roughness: 0.35,
+                    envMapIntensity: 1.0,
+                });
+
+                // 侧面 & 背面：纯金属
+                const sideMat = goldMaterial.clone();
+
+                // 圆柱体：顶面(正面)用图片，侧面和底面用金属
+                // CylinderGeometry 材质顺序：[侧面, 顶面, 底面]
+                const geo = new THREE.CylinderGeometry(radius, radius, thickness, 96);
+                const mesh = new THREE.Mesh(geo, [sideMat, faceMat, sideMat]);
+                mesh.rotation.x = Math.PI / 2; // 顶面朝相机
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                medalGroup.add(mesh);
+
+                // 外圈金属边
+                const rim = new THREE.Mesh(
+                    new THREE.TorusGeometry(radius, 0.06, 24, 96),
+                    darkMetalMaterial
+                );
+                rim.castShadow = true;
+                medalGroup.add(rim);
+
+                // 顶部挂环
+                const loop = new THREE.Mesh(
+                    new THREE.TorusGeometry(0.12, 0.035, 16, 32),
+                    darkMetalMaterial
+                );
+                loop.position.set(0, radius + 0.08, 0);
+                loop.castShadow = true;
+                medalGroup.add(loop);
+
+                resolve();
+            },
+            undefined,
+            reject
+        );
+    });
+}
+
+// ---------- 模式 C：程序化生成（兜底）----------
+function buildProceduralMedal() {
+    const radius = 1.4, thickness = 0.18;
+
+    const disc = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius, radius, thickness, 64),
+        goldMaterial
+    );
+    disc.rotation.x = Math.PI / 2;
+    disc.castShadow = true;
+    medalGroup.add(disc);
+
+    const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(radius, 0.06, 24, 80),
+        darkMetalMaterial
+    );
+    rim.castShadow = true;
+    medalGroup.add(rim);
+
+    const innerRim = new THREE.Mesh(
+        new THREE.TorusGeometry(radius * 0.78, 0.025, 16, 80),
+        goldMaterial
+    );
+    innerRim.position.z = 0.01;
+    medalGroup.add(innerRim);
+
+    const centerDisc = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius * 0.55, radius * 0.55, 0.06, 48),
+        goldMaterial
+    );
+    centerDisc.rotation.x = Math.PI / 2;
+    centerDisc.position.z = thickness / 2 + 0.03;
+    centerDisc.castShadow = true;
+    medalGroup.add(centerDisc);
+
+    const loop = new THREE.Mesh(
+        new THREE.TorusGeometry(0.12, 0.035, 16, 32),
+        darkMetalMaterial
+    );
+    loop.position.set(0, radius + 0.08, 0);
+    loop.castShadow = true;
+    medalGroup.add(loop);
+}
+
+// ============================================================
+// 按配置启动，失败自动回退
+// ============================================================
+async function init() {
+    try {
+        if (CONFIG.mode === 'model') {
+            await loadModel(CONFIG.modelUrl);
+        } else if (CONFIG.mode === 'image') {
+            await loadImageMedal(CONFIG.imageUrl);
+        } else {
+            throw new Error('procedural');
+        }
+    } catch (e) {
+        console.warn('外部素材加载失败，回退到程序化奖牌：', e);
+        loadingEl.textContent = '素材未找到，使用内置奖牌';
+        buildProceduralMedal();
+    }
+
+    // 整体轻微倾斜，更有立体感
+    medalGroup.rotation.x = -0.1;
+    medalGroup.rotation.y = 0.3;
+
+    loadingEl.style.opacity = '0';
+    setTimeout(() => loadingEl.remove(), 400);
+    animate();
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+}
+
+addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+});
+
+init();
+</script>
+</body>
+</html>
