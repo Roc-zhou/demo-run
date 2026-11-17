@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <title>H5 二维码扫描 Demo</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #f3f4f6; color: #111827; }
+    main { width: min(100% - 28px, 560px); margin: 0 auto; padding: 28px 0 40px; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    .intro { margin: 0 0 20px; color: #6b7280; font-size: 14px; line-height: 1.6; }
+    .panel { background: #fff; border-radius: 16px; padding: 16px; box-shadow: 0 6px 24px #1118270d; }
+    #reader { width: 100%; overflow: hidden; border-radius: 12px; background: #111827; }
+    #reader video { border-radius: 12px; object-fit: cover; }
+    .status { min-height: 24px; margin: 12px 0; font-size: 14px; color: #4b5563; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    button, .upload-label { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 14px; border: 0; border-radius: 10px; background: #2563eb; color: white; font-size: 15px; font-weight: 600; cursor: pointer; }
+    button.secondary, .upload-label { background: #e5e7eb; color: #111827; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    input[type=file] { display: none; }
+    .result { margin-top: 16px; padding: 14px; border: 1px solid #d1d5db; border-radius: 12px; background: #f9fafb; }
+    .result h2 { margin: 0 0 8px; font-size: 15px; }
+    #resultText { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; }
+    .result-actions { display: flex; gap: 8px; margin-top: 12px; }
+    .result-actions button { min-height: 38px; font-size: 13px; }
+    .hint { margin: 16px 2px 0; color: #6b7280; font-size: 12px; line-height: 1.6; }
+    .hidden { display: none; }
+    @media (max-width: 380px) { .actions { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>二维码扫描</h1>
+  <p class="intro">使用手机摄像头实时识别二维码，也可以选择本地图片进行识别。</p>
+
+  <section class="panel">
+    <div id="reader"></div>
+    <p id="status" class="status" role="status" aria-live="polite">点击“开始扫描”，并允许浏览器访问摄像头。</p>
+
+    <div class="actions">
+      <button id="startBtn" type="button">开始扫描</button>
+      <button id="stopBtn" class="secondary" type="button" disabled>停止扫描</button>
+      <button id="switchBtn" class="secondary" type="button" disabled>切换摄像头</button>
+      <label class="upload-label" for="fileInput">上传图片识别</label>
+      <input id="fileInput" type="file" accept="image/*">
+    </div>
+
+    <section id="resultBox" class="result hidden" aria-live="polite">
+      <h2>识别结果</h2>
+      <p id="resultText"></p>
+      <div class="result-actions">
+        <button id="copyBtn" type="button">复制内容</button>
+        <button id="rescanBtn" class="secondary" type="button">继续扫描</button>
+      </div>
+    </section>
+  </section>
+
+  <p class="hint">
+    部署要求：线上页面必须使用 HTTPS；摄像头权限由浏览器弹窗控制。若在微信内置浏览器或特定 WebView 中使用，请在目标设备上实际测试权限及摄像头兼容性。
+  </p>
+</main>
+
+<script>
+(() => {
+  const statusEl = document.getElementById("status");
+  const startBtn = document.getElementById("startBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const switchBtn = document.getElementById("switchBtn");
+  const fileInput = document.getElementById("fileInput");
+  const resultBox = document.getElementById("resultBox");
+  const resultText = document.getElementById("resultText");
+  const copyBtn = document.getElementById("copyBtn");
+  const rescanBtn = document.getElementById("rescanBtn");
+
+  let scanner = null;
+  let cameras = [];
+  let cameraIndex = 0;
+  let isScanning = false;
+  let isBusy = false;
+  let lastResult = "";
+
+  const setStatus = (message) => { statusEl.textContent = message; };
+  const setButtons = () => {
+    startBtn.disabled = isScanning || isBusy;
+    stopBtn.disabled = !isScanning || isBusy;
+    switchBtn.disabled = !isScanning || cameras.length < 2 || isBusy;
+  };
+
+  function showResult(decodedText) {
+    if (!decodedText || decodedText === lastResult) return;
+    lastResult = decodedText;
+    resultText.textContent = decodedText;
+    resultBox.classList.remove("hidden");
+    setStatus("识别成功。");
+    stopScanner();
+  }
+
+  function getScanner() {
+    if (!scanner) scanner = new Html5Qrcode("reader", { verbose: false });
+    return scanner;
+  }
+
+  async function stopScanner() {
+    if (!scanner || !isScanning) return;
+    isBusy = true;
+    setButtons();
+    try {
+      await scanner.stop();
+      isScanning = false;
+      setStatus("扫描已停止。");
+    } catch (error) {
+      console.error("停止摄像头失败：", error);
+      setStatus("停止扫描时发生错误，请刷新页面后重试。");
+    } finally {
+      isBusy = false;
+      setButtons();
+    }
+  }
+
+  async function startScanner() {
+    if (isBusy || isScanning) return;
+    if (!window.isSecureContext && location.hostname !== "localhost") {
+      setStatus("当前不是安全上下文。请通过 HTTPS 访问页面后再使用摄像头。");
+      return;
+    }
+    if (typeof Html5Qrcode === "undefined") {
+      setStatus("二维码组件加载失败，请检查网络或 CDN 是否可访问。");
+      return;
+    }
+
+    isBusy = true;
+    setButtons();
+    setStatus("正在请求摄像头权限……");
+    resultBox.classList.add("hidden");
+    lastResult = "";
+
+    try {
+      const qr = getScanner();
+      cameras = await Html5Qrcode.getCameras();
+      if (!cameras || cameras.length === 0) {
+        throw new Error("没有检测到可用摄像头。");
+      }
+
+      // 优先选择名称中包含 back / rear / environment 的后置摄像头。
+      const backIndex = cameras.findIndex(camera =>
+        /back|rear|environment|后置/i.test(camera.label || "")
+      );
+      cameraIndex = backIndex >= 0 ? backIndex : 0;
+
+      await qr.start(
+        cameras[cameraIndex].id,
+        { fps: 10, qrbox: (viewWidth, viewHeight) => {
+            const side = Math.floor(Math.min(viewWidth, viewHeight) * 0.72);
+            return { width: side, height: side };
+          },
+          aspectRatio: 1.0
+        },
+        showResult,
+        () => {} // 单帧未识别时不提示，避免刷屏。
+      );
+
+      isScanning = true;
+      setStatus("正在扫描，请将二维码放入取景框内。");
+    } catch (error) {
+      console.error("启动扫描失败：", error);
+      const message = error && error.message ? error.message : String(error);
+      if (/NotAllowedError|Permission denied|Permission dismissed/i.test(message)) {
+        setStatus("摄像头权限被拒绝。请在浏览器设置中允许此网站使用摄像头，然后重试。");
+      } else {
+        setStatus("无法启动摄像头：" + message);
+      }
+      isScanning = false;
+    } finally {
+      isBusy = false;
+      setButtons();
+    }
+  }
+
+  async function switchCamera() {
+    if (!isScanning || cameras.length < 2 || isBusy) return;
+    isBusy = true;
+    setButtons();
+    try {
+      await scanner.stop();
+      isScanning = false;
+      cameraIndex = (cameraIndex + 1) % cameras.length;
+      await scanner.start(
+        cameras[cameraIndex].id,
+        { fps: 10, qrbox: (w, h) => {
+            const side = Math.floor(Math.min(w, h) * 0.72);
+            return { width: side, height: side };
+          }, aspectRatio: 1.0 },
+        showResult,
+        () => {}
+      );
+      isScanning = true;
+      setStatus("已切换摄像头，继续扫描中。");
+    } catch (error) {
+      console.error("切换摄像头失败：", error);
+      setStatus("切换摄像头失败：" + (error.message || error));
+    } finally {
+      isBusy = false;
+      setButtons();
+    }
+  }
+
+  startBtn.addEventListener("click", startScanner);
+  stopBtn.addEventListener("click", stopScanner);
+  switchBtn.addEventListener("click", switchCamera);
+
+  fileInput.addEventListener("change", async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    if (isScanning) await stopScanner();
+    isBusy = true;
+    setButtons();
+    setStatus("正在识别图片……");
+    resultBox.classList.add("hidden");
+    lastResult = "";
+    try {
+      const qr = getScanner();
+      const decodedText = await qr.scanFile(file, true);
+      showResult(decodedText);
+    } catch (error) {
+      console.error("图片识别失败：", error);
+      setStatus("未能从图片中识别二维码，请换一张清晰、完整的二维码图片。");
+    } finally {
+      isBusy = false;
+      setButtons();
+      fileInput.value = "";
+    }
+  });
+
+  copyBtn.addEventListener("click", async () => {
+    if (!lastResult) return;
+    try {
+      await navigator.clipboard.writeText(lastResult);
+      setStatus("识别内容已复制。");
+    } catch (error) {
+      // 兼容部分不支持 Clipboard API 的环境。
+      const textarea = document.createElement("textarea");
+      textarea.value = lastResult;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const ok = document.execCommand("copy");
+      textarea.remove();
+      setStatus(ok ? "识别内容已复制。" : "复制失败，请手动选择并复制识别内容。");
+    }
+  });
+
+  rescanBtn.addEventListener("click", () => {
+    resultBox.classList.add("hidden");
+    lastResult = "";
+    startScanner();
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && isScanning) stopScanner();
+  });
+})();
+</script>
+</body>
+</html>
